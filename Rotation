@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ALttPR Weekly Rotation</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    body { margin:0; background:#0b1220; color:#e6eefc; }
+    header { padding:14px 18px; border-bottom:1px solid rgba(255,255,255,.08); display:flex; justify-content:space-between; align-items:center; gap:10px;}
+    h1 { margin:0; font-size:16px; }
+    .pill { font-size:12px; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); white-space:nowrap;}
+    main { display:grid; grid-template-columns: 360px 1fr; gap:12px; padding:12px; }
+    .card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.10); border-radius:14px; overflow:hidden; }
+    .card h2 { margin:0; padding:10px 12px; font-size:13px; border-bottom:1px solid rgba(255,255,255,.08); }
+    .content { padding:10px 12px; }
+    input { width:100%; padding:10px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.25); color:#e6eefc; }
+    .list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+    .btn { text-align:left; width:100%; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03); color:#e6eefc; cursor:pointer; display:flex; justify-content:space-between; gap:10px; align-items:center;}
+    .btn:hover { background:rgba(255,255,255,.06); }
+    .btn.active { border-color:rgba(120,180,255,.55); background:rgba(120,180,255,.12); }
+    .tag { display:inline-block; font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); margin-right:6px; }
+    .muted { color:rgba(230,238,252,.75); font-size:13px; line-height:1.45; }
+    .rot { display:flex; flex-direction:column; gap:8px; }
+    .rotItem { padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03); display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
+    .badge { font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); }
+    .now { border-color:rgba(110,255,180,.35); background:rgba(110,255,180,.12); color:#bfffe0; }
+    .next { border-color:rgba(120,180,255,.35); background:rgba(120,180,255,.12); color:#cfe1ff; }
+    .error { color:#ffb4b4; }
+    @media (max-width: 940px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ALttPR Weekly Rotation</h1>
+  <div class="pill" id="pill">Lade…</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Modus-Pool</h2>
+    <div class="content">
+      <input id="search" placeholder="Mode suchen…" />
+      <div class="list" id="modeList"></div>
+      <div class="muted" style="margin-top:10px;">
+        Tipp: Hover zeigt Kurzinfo, Klick zeigt Details.
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex; flex-direction:column; gap:12px;">
+    <div class="card">
+      <h2>Details</h2>
+      <div class="content" id="details"><div class="muted">Wähle links einen Modus.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Rotation</h2>
+      <div class="content">
+        <div class="rot" id="rot"></div>
+        <div class="muted" style="margin-top:10px;">
+          Den aktuellen Modus steuerst du über <b>Rotation!C2</b> (current_index).
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+/** HIER DEINE 2 CSV-LINKS EINTRAGEN */
+const MODES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vScUYgB430G9RSK2itXgu0TPKZtKue58jEolYYIRMK_dfpeU2-ytctFgfSUOM2mI9xuWOkjh_ZXzne1/pub?gid=459781144&single=true&output=csv";
+const ROTATION_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vScUYgB430G9RSK2itXgu0TPKZtKue58jEolYYIRMK_dfpeU2-ytctFgfSUOM2mI9xuWOkjh_ZXzne1/pub?gid=766349274&single=true&output=csv";
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const rows = lines.map(line => {
+    const out = [];
+    let cur = "", inQ = false;
+    for (let i=0;i<line.length;i++){
+      const ch = line[i];
+      if (ch === '"' && line[i+1] === '"'){ cur += '"'; i++; continue; }
+      if (ch === '"'){ inQ = !inQ; continue; }
+      if (ch === ',' && !inQ){ out.push(cur); cur=""; continue; }
+      cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  });
+  return rows;
+}
+
+async function loadCSV(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("CSV konnte nicht geladen werden (" + res.status + ")");
+  return await res.text();
+}
+
+function toObjects(rows) {
+  const header = rows[0];
+  return rows.slice(1).filter(r => r.some(x => x !== "")).map(r => {
+    const obj = {};
+    header.forEach((h, i) => obj[h] = (r[i] ?? ""));
+    return obj;
+  });
+}
+
+function normalizeBool(v){
+  const s = String(v).toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "ja";
+}
+
+let MODES = [];
+let ROTATION = [];
+let currentIndex = 0;
+let selectedId = null;
+
+function modeById(id){ return MODES.find(m => m.id === id); }
+function wrapIndex(i){
+  const n = ROTATION.length || 1;
+  return ((i % n) + n) % n;
+}
+
+function detectCurrentIndex(rotObjs){
+  // Wir lesen Rotation!C2, indem wir eine "extra Spalte" als CSV leider nicht sauber bekommen.
+  // Deshalb der Trick: Wir akzeptieren auch eine "Zeile" in Rotation:
+  // mode_id,value
+  // current_index,0
+  // Wenn du das NICHT hast, bleibt currentIndex=0 (und du steuerst per Dashboard-Reload + Rotation-Tab anpassen).
+  for (const o of rotObjs){
+    const key = String(o.mode_id || o.key || "").toLowerCase();
+    if (key === "current_index"){
+      const v = Number(o.value || o.current_index || o.idx || "");
+      if (Number.isFinite(v)) return v;
+    }
+  }
+  return 0;
+}
+
+function renderPool(filter=""){
+  const list = document.getElementById("modeList");
+  list.innerHTML = "";
+  const needle = filter.trim().toLowerCase();
+
+  const visible = MODES
+    .filter(m => normalizeBool(m.enabled))
+    .filter(m => {
+      if (!needle) return true;
+      return (m.name + " " + m.id + " " + (m.tags||"") + " " + (m.description||"")).toLowerCase().includes(needle);
+    });
+
+  for (const m of visible){
+    const b = document.createElement("button");
+    b.className = "btn" + (m.id === selectedId ? " active" : "");
+    b.title = m.description || ""; // Hover Tooltip
+    b.onclick = () => { selectedId = m.id; renderDetails(); renderPool(document.getElementById("search").value); };
+
+    const badge = document.createElement("span");
+    badge.className = "tag";
+    badge.textContent = (m.tags || "").split(",")[0]?.trim() || "Mode";
+
+    const left = document.createElement("span");
+    left.textContent = m.name || m.id;
+
+    b.appendChild(left);
+    b.appendChild(badge);
+    list.appendChild(b);
+  }
+
+  if (visible.length === 0){
+    const d = document.createElement("div");
+    d.className = "muted";
+    d.textContent = "Keine Treffer.";
+    list.appendChild(d);
+  }
+}
+
+function renderDetails(){
+  const el = document.getElementById("details");
+  const m = modeById(selectedId);
+  if (!m){ el.innerHTML = `<div class="muted">Wähle links einen Modus.</div>`; return; }
+  const tags = (m.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+  el.innerHTML = `
+    <div style="font-size:16px;font-weight:800;">${m.name || m.id}</div>
+    <div class="muted" style="margin-top:6px; white-space:pre-wrap;">${m.description || ""}</div>
+    <div style="margin-top:10px;">${tags.map(t => `<span class="tag">${t}</span>`).join("") || `<span class="tag">—</span>`}</div>
+  `;
+}
+
+function renderRotation(){
+  const rot = document.getElementById("rot");
+  rot.innerHTML = "";
+
+  const pill = document.getElementById("pill");
+  const nowId = ROTATION[currentIndex];
+  const now = modeById(nowId);
+  pill.textContent = "Aktueller Weekly: " + (now ? now.name : (nowId || "—"));
+
+  const show = 8; // jetzt + 7
+  for (let k=0;k<Math.min(show, ROTATION.length || show);k++){
+    const idx = wrapIndex(currentIndex + k);
+    const id = ROTATION[idx];
+    const m = modeById(id);
+    const row = document.createElement("div");
+    row.className = "rotItem";
+    const badgeClass = k===0 ? "badge now" : k===1 ? "badge next" : "badge";
+    const badgeText = k===0 ? "JETZT" : k===1 ? "NÄCHSTE" : `+${k}w`;
+    row.innerHTML = `
+      <div>
+        <div style="font-weight:800; font-size:13px;">${m ? m.name : id}</div>
+        <div class="muted">${m ? (m.tags || "") : ""}</div>
+      </div>
+      <span class="${badgeClass}">${badgeText}</span>
+    `;
+    row.title = m?.description || "";
+    row.onclick = () => { selectedId = id; renderDetails(); renderPool(document.getElementById("search").value); };
+    rot.appendChild(row);
+  }
+}
+
+async function init(){
+  if (MODES_CSV_URL.includes("PASTE_") || ROTATION_CSV_URL.includes("PASTE_")) {
+    document.getElementById("pill").textContent = "Bitte CSV-Links eintragen";
+    document.getElementById("pill").classList.add("error");
+    return;
+  }
+
+  const [modesCSV, rotCSV] = await Promise.all([ loadCSV(MODES_CSV_URL), loadCSV(ROTATION_CSV_URL) ]);
+  const modesRows = parseCSV(modesCSV);
+  const rotRows = parseCSV(rotCSV);
+
+  MODES = toObjects(modesRows);
+  const rotObjs = toObjects(rotRows);
+
+  ROTATION = rotObjs
+    .filter(o => (o.mode_id || "").trim() !== "")
+    .filter(o => (o.mode_id || "").toLowerCase() !== "current_index")
+    .map(o => (o.mode_id || "").trim());
+
+  currentIndex = wrapIndex(detectCurrentIndex(rotObjs));
+  selectedId = ROTATION[currentIndex] || (MODES[0]?.id ?? null);
+
+  renderPool("");
+  renderDetails();
+  renderRotation();
+}
+
+document.getElementById("search").addEventListener("input", (e) => renderPool(e.target.value));
+init().catch(err => {
+  document.getElementById("pill").textContent = "Fehler beim Laden";
+  alert(err.message);
+});
+</script>
+</body>
+</html>
